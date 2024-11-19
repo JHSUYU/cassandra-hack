@@ -751,6 +751,7 @@ public class OutboundConnection
 
             OutboundConnectionSettings settings = established.settings;
             int messagingVersion = established.messagingVersion;
+            logger.info("FL754, messagingVersion: {}, maxSendBytes: {}", messagingVersion, maxSendBytes);
 
             FrameEncoder.Payload sending = null;
             int canonicalSize = 0; // number of bytes we must use for our resource accounting

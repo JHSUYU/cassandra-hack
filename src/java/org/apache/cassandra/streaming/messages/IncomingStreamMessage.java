@@ -45,11 +45,11 @@ public class IncomingStreamMessage extends StreamMessage
             if (cfs == null)
                 throw new StreamReceiveException(session, "CF " + header.tableId + " was dropped during streaming");
 
-            IncomingStream incomingData = cfs.getStreamManager().prepareIncomingStream(session, header);
-            incomingData.read(input, version);
 
             try
             {
+                IncomingStream incomingData = cfs.getStreamManager().prepareIncomingStream(session, header);
+                incomingData.read(input, version);
                 return new IncomingStreamMessage(incomingData, header);
             }
             catch (Throwable t)

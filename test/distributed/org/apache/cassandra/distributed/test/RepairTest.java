@@ -155,6 +155,7 @@ public class RepairTest extends DistributedTestBase
     @Test
     public void testSimpleSequentialRepairCompressionOff() throws IOException
     {
+        System.out.println("Running testSimpleSequentialRepairCompressionOff");
         simpleRepair(cluster, true, false);
     }
 }

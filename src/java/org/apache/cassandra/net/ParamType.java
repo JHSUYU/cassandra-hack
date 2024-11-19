@@ -55,7 +55,9 @@ public enum ParamType
     TRACE_TYPE          (6, "TraceType",     Tracing.traceTypeSerializer),
 
     @Deprecated
-    TRACK_REPAIRED_DATA (7, "TrackRepaired", LegacyFlag.serializer);
+    TRACK_REPAIRED_DATA (7, "TrackRepaired", LegacyFlag.serializer),
+
+    DRY_RUN_FLAG        (8, "DRY_RUN",       LegacyFlag.serializer);
 
     final int id;
     @Deprecated final String legacyAlias; // pre-4.0 we used to serialize entire param name string

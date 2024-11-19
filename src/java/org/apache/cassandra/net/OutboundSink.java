@@ -51,6 +51,8 @@ public class OutboundSink
 
         public void accept(Message<?> message, InetAddressAndPort to, ConnectionType connectionType)
         {
+            System.out.println("FL54, condition.classname is: " + condition.getClass().getName());
+            System.out.println("FL55, next.classname is: " + next.getClass().getName());
             if (condition.test(message, to))
                 next.accept(message, to, connectionType);
         }
@@ -67,6 +69,7 @@ public class OutboundSink
 
     public void accept(Message<?> message, InetAddressAndPort to, ConnectionType connectionType)
     {
+        System.out.println("FL70, sink.classname is: " + sink.getClass().getName());
         sink.accept(message, to, connectionType);
     }
 

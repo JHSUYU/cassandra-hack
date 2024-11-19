@@ -412,6 +412,7 @@ public class InboundConnectionInitiator
             }
 
             FrameDecoder frameDecoder;
+            logger.info("FL415, initiate.framing: {}", initiate.framing);
             switch (initiate.framing)
             {
                 case LZ4:

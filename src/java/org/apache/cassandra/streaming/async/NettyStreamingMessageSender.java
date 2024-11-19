@@ -318,6 +318,7 @@ public class NettyStreamingMessageSender implements StreamingMessageSender
 
             try
             {
+                logger.info("run FileStreamTask");
                 Channel channel = getOrCreateChannel();
                 if (!channel.attr(TRANSFERRING_FILE_ATTR).compareAndSet(false, true))
                     throw new IllegalStateException("channel's transferring state is currently set to true. refusing to start new stream");
@@ -335,6 +336,9 @@ public class NettyStreamingMessageSender implements StreamingMessageSender
             catch (Exception e)
             {
                 session.onError(e);
+            }
+            catch (Throwable t){
+                logger.info("Unexpected error", t);
             }
             finally
             {

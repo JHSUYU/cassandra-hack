@@ -212,6 +212,7 @@ public class StreamingInboundHandler extends ChannelInboundHandlerAdapter
                 JVMStabilityInspector.inspectThrowable(t);
                 if (session != null)
                 {
+                    logger.info("session {} failed", session);
                     session.onError(t);
                 }
                 else if (t instanceof StreamReceiveException)

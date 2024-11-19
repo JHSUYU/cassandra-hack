@@ -29,6 +29,7 @@ import com.google.common.util.concurrent.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.opentelemetry.context.Context;
 import org.apache.cassandra.concurrent.DebuggableThreadPoolExecutor;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.dht.Range;
@@ -318,8 +319,9 @@ public class RepairSession extends AbstractFuture<RepairSessionResult> implement
         List<ListenableFuture<RepairResult>> jobs = new ArrayList<>(cfnames.length);
         for (String cfname : cfnames)
         {
+            logger.info("FL322, Repairjob created for {}", cfname);
             RepairJob job = new RepairJob(this, cfname);
-            executor.execute(job);
+            executor.execute(Context.current().wrap(job));
             jobs.add(job);
         }
 

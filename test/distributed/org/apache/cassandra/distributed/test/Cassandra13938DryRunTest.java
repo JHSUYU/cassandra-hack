@@ -90,7 +90,7 @@ public class Cassandra13938DryRunTest extends DistributedTestBase{
     {
         cluster.get(1).runOnInstance(rethrow(() -> {
             SimpleCondition await = new SimpleCondition();
-            StorageService.instance.repair(KEYSPACE, options, ImmutableList.of((tag, event) -> {
+            StorageService.instance.repair$instrumentation(KEYSPACE, options, ImmutableList.of((tag, event) -> {
                 if (event.getType() == ProgressEventType.COMPLETE)
                     await.signalAll();
             })).right.get();
@@ -140,8 +140,9 @@ public class Cassandra13938DryRunTest extends DistributedTestBase{
     @Test
     public void testCassandra13938() throws IOException
     {
+        System.out.println("Running testCassandra13938");
         boolean compression = true;
-        boolean sequential = true;
+        boolean sequential = false;
         prepareData(cluster, compression);
         repair(cluster, ImmutableMap.of("parallelism", sequential ? "sequential" : "parallel"));
         verify(cluster, 0, 2001, 1, 2, 3);

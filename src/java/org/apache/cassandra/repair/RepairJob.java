@@ -29,6 +29,7 @@ import com.google.common.util.concurrent.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.opentelemetry.context.Context;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.Keyspace;
@@ -37,6 +38,7 @@ import org.apache.cassandra.repair.asymmetric.HostDifferences;
 import org.apache.cassandra.repair.asymmetric.PreferedNodeFilter;
 import org.apache.cassandra.repair.asymmetric.ReduceHelper;
 import org.apache.cassandra.locator.InetAddressAndPort;
+import org.apache.cassandra.repair.messages.ValidationResponse;
 import org.apache.cassandra.streaming.PreviewKind;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
@@ -44,6 +46,7 @@ import org.apache.cassandra.tracing.Tracing;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.MerkleTrees;
 import org.apache.cassandra.utils.Pair;
+import org.apache.cassandra.utils.TraceUtil;
 
 /**
  * RepairJob runs repair on given ColumnFamily.
@@ -87,6 +90,7 @@ public class RepairJob extends AbstractFuture<RepairResult> implements Runnable
 
         ListenableFuture<List<TreeResponse>> validations;
         // Create a snapshot at all nodes unless we're using pure parallel repairs
+        logger.info("FL90 parallelismDegree: {}", parallelismDegree);
         if (parallelismDegree != RepairParallelism.PARALLEL)
         {
             ListenableFuture<List<InetAddressAndPort>> allSnapshotTasks;
@@ -126,9 +130,18 @@ public class RepairJob extends AbstractFuture<RepairResult> implements Runnable
             validations = sendValidationRequest(allEndpoints);
         }
 
+        AsyncFunction<List<TreeResponse>, List<SyncStat>> syncFunction =
+        session.optimiseStreams && !session.pullRepair ? this::optimisedSyncing : this::standardSyncing;
+
+        logger.info("FL136, isDryRun is {}", TraceUtil.isDryRun());
         // When all validations complete, submit sync tasks
+//        ListenableFuture<List<SyncStat>> syncResults = Futures.transformAsync(
+//        validations,
+//        responses -> (() -> syncFunction.apply(responses)),
+//        taskExecutor
+//        );
         ListenableFuture<List<SyncStat>> syncResults = Futures.transformAsync(validations,
-                                                                              session.optimiseStreams && !session.pullRepair ? this::optimisedSyncing : this::standardSyncing,
+                                                                              syncFunction,
                                                                               taskExecutor);
 
         // When all sync complete, set the final result
@@ -168,6 +181,7 @@ public class RepairJob extends AbstractFuture<RepairResult> implements Runnable
 
     private ListenableFuture<List<SyncStat>> standardSyncing(List<TreeResponse> trees)
     {
+        logger.info("FL180, isDryRun is {}", TraceUtil.isDryRun());
         List<SyncTask> syncTasks = createStandardSyncTasks(desc,
                                                            trees,
                                                            FBUtilities.getLocalAddressAndPort(),
@@ -175,6 +189,7 @@ public class RepairJob extends AbstractFuture<RepairResult> implements Runnable
                                                            session.isIncremental,
                                                            session.pullRepair,
                                                            session.previewKind);
+        logger.info("FL181, syncTasks size is {}", syncTasks.size());
         return executeTasks(syncTasks);
     }
 
@@ -259,11 +274,28 @@ public class RepairJob extends AbstractFuture<RepairResult> implements Runnable
     @VisibleForTesting
     ListenableFuture<List<SyncStat>> executeTasks(List<SyncTask> syncTasks)
     {
+        if(TraceUtil.isDryRun()){
+            return executeTasks$instrumentation(syncTasks);
+        }
         for (SyncTask task : syncTasks)
         {
             if (!task.isLocal())
                 session.trackSyncCompletion(Pair.create(desc, task.nodePair()), (CompletableRemoteSyncTask) task);
             taskExecutor.submit(task);
+        }
+
+        return Futures.allAsList(syncTasks);
+    }
+
+    ListenableFuture<List<SyncStat>> executeTasks$instrumentation(List<SyncTask> syncTasks)
+    {
+        logger.info("FL266, redirect to executeTasks$instrumentation");
+        for (SyncTask task : syncTasks)
+        {
+            if (!task.isLocal())
+                session.trackSyncCompletion(Pair.create(desc, task.nodePair()), (CompletableRemoteSyncTask) task);
+            logger.info("FL287, task classname is {}", task.getClass().getName());
+            taskExecutor.submit(Context.current().wrap(task));
         }
 
         return Futures.allAsList(syncTasks);
@@ -342,6 +374,10 @@ public class RepairJob extends AbstractFuture<RepairResult> implements Runnable
      */
     private ListenableFuture<List<TreeResponse>> sendValidationRequest(Collection<InetAddressAndPort> endpoints)
     {
+        if(TraceUtil.isDryRun()){
+            logger.info("FL349, redirect to sendValidationRequest$instrumentation");
+            return sendValidationRequest$instrumentation(endpoints);
+        }
         String message = String.format("Requesting merkle trees for %s (to %s)", desc.columnFamily, endpoints);
         logger.info("{} {}", session.previewKind.logPrefix(desc.sessionId), message);
         Tracing.traceRepair(message);
@@ -353,6 +389,23 @@ public class RepairJob extends AbstractFuture<RepairResult> implements Runnable
             tasks.add(task);
             session.trackValidationCompletion(Pair.create(desc, endpoint), task);
             taskExecutor.execute(task);
+        }
+        return Futures.allAsList(tasks);
+    }
+
+    private ListenableFuture<List<TreeResponse>> sendValidationRequest$instrumentation(Collection<InetAddressAndPort> endpoints)
+    {
+        String message = String.format("Requesting merkle trees for %s (to %s)", desc.columnFamily, endpoints);
+        logger.info("{} {}", session.previewKind.logPrefix(desc.sessionId), message);
+        Tracing.traceRepair(message);
+        int nowInSec = FBUtilities.nowInSeconds();
+        List<ListenableFuture<TreeResponse>> tasks = new ArrayList<>(endpoints.size());
+        for (InetAddressAndPort endpoint : endpoints)
+        {
+            ValidationTask task = new ValidationTask(desc, endpoint, nowInSec, session.previewKind);
+            tasks.add(task);
+            session.trackValidationCompletion(Pair.create(desc, endpoint), task);
+            taskExecutor.execute(Context.current().wrap(task));
         }
         return Futures.allAsList(tasks);
     }

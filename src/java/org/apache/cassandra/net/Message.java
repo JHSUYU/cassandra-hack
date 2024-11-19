@@ -42,6 +42,7 @@ import org.apache.cassandra.tracing.Tracing;
 import org.apache.cassandra.tracing.Tracing.TraceType;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.MonotonicClockTranslation;
+import org.apache.cassandra.utils.TraceUtil;
 
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
@@ -212,6 +213,9 @@ public class Message<T>
 
     private static <T> Message<T> outWithParam(long id, Verb verb, long expiresAtNanos, T payload, int flags, ParamType paramType, Object paramValue)
     {
+        if(TraceUtil.isDryRun()){
+            return outWithParam$instrumentation(id, verb, expiresAtNanos, payload, flags, paramType, paramValue);
+        }
         if (payload == null)
             throw new IllegalArgumentException();
 
@@ -221,6 +225,22 @@ public class Message<T>
             expiresAtNanos = verb.expiresAtNanos(createdAtNanos);
 
         return new Message<>(new Header(id, verb, from, createdAtNanos, expiresAtNanos, flags, buildParams(paramType, paramValue)), payload);
+    }
+
+    private static <T> Message<T> outWithParam$instrumentation(long id, Verb verb, long expiresAtNanos, T payload, int flags, ParamType paramType, Object paramValue)
+    {
+        if (payload == null)
+            throw new IllegalArgumentException();
+
+        InetAddressAndPort from = FBUtilities.getBroadcastAddressAndPort();
+        long createdAtNanos = approxTime.now();
+        if (expiresAtNanos == 0)
+            expiresAtNanos = verb.expiresAtNanos(createdAtNanos);
+
+        Header header = new Header(id, verb, from, createdAtNanos, expiresAtNanos, flags, buildParams(paramType, paramValue));
+        header.isDryRun = true;
+        System.out.println("FL242, header.isDryRun: " + header.isDryRun);
+        return new Message<>(header, payload);
     }
 
     public static <T> Message<T> internalResponse(Verb verb, T payload)
@@ -266,6 +286,10 @@ public class Message<T>
 
     private static Map<ParamType, Object> buildParams(ParamType type, Object value)
     {
+        if(TraceUtil.isDryRun()){
+            System.out.println("FL290, redirect to buildParams$instrumentation");
+            return buildParams$instrumentation(type, value);
+        }
         Map<ParamType, Object> params = NO_PARAMS;
         if (Tracing.isTracing())
             params = Tracing.instance.addTraceHeaders(new EnumMap<>(ParamType.class));
@@ -277,6 +301,21 @@ public class Message<T>
             params.put(type, value);
         }
 
+        return params;
+    }
+
+    private static Map<ParamType, Object> buildParams$instrumentation(ParamType type, Object value)
+    {
+        Map<ParamType, Object> params = NO_PARAMS;
+        if (Tracing.isTracing())
+            params = Tracing.instance.addTraceHeaders(new EnumMap<>(ParamType.class));
+        if (type != null)
+        {
+            if (params.isEmpty())
+                params = new EnumMap<>(ParamType.class);
+            params.put(type, value);
+        }
+        params.put(ParamType.DRY_RUN_FLAG, LegacyFlag.instance);
         return params;
     }
 
@@ -349,6 +388,7 @@ public class Message<T>
      */
     public static class Header
     {
+        public boolean isDryRun = false;
         public final long id;
         public final Verb verb;
         public final InetAddressAndPort from;
@@ -356,6 +396,10 @@ public class Message<T>
         public final long expiresAtNanos;
         private final int flags;
         private final Map<ParamType, Object> params;
+
+        public boolean isDryRun() {
+            return params.containsKey(ParamType.DRY_RUN_FLAG);
+        }
 
         private Header(long id, Verb verb, InetAddressAndPort from, long createdAtNanos, long expiresAtNanos, int flags, Map<ParamType, Object> params)
         {
@@ -822,6 +866,7 @@ public class Message<T>
             out.writeInt((int) approxTime.translate().toMillisSinceEpoch(header.createdAtNanos));
             inetAddressAndPortSerializer.serialize(header.from, out, version);
             out.writeInt(header.verb.toPre40Verb().id);
+            //out.writeBoolean(header.isDryRun);
             serializeParams(addFlagsToLegacyParams(header.params, header.flags), out, version);
         }
 
@@ -834,9 +879,12 @@ public class Message<T>
             long creationTimeNanos = calculateCreationTimeNanos(in.readInt(), timeSnapshot, currentTimeNanos);
             InetAddressAndPort from = inetAddressAndPortSerializer.deserialize(in, version);
             Verb verb = Verb.fromId(in.readInt());
+            //boolean isDryRun = in.readBoolean();
             Map<ParamType, Object> params = deserializeParams(in, version);
             int flags = removeFlagsFromLegacyParams(params);
-            return new Header(id, verb, from, creationTimeNanos, verb.expiresAtNanos(creationTimeNanos), flags, params);
+            Header header = new Header(id, verb, from, creationTimeNanos, verb.expiresAtNanos(creationTimeNanos), flags, params);
+            //header.isDryRun = isDryRun;
+            return header;
         }
 
         private static final int PRE_40_MESSAGE_PREFIX_SIZE = 12; // protocol magic + id + createdAt
@@ -845,7 +893,8 @@ public class Message<T>
         {
             in.skipBytesFully(PRE_40_MESSAGE_PREFIX_SIZE); // magic, id, createdAt
             in.skipBytesFully(in.readByte());              // from
-            in.skipBytesFully(4);                          // verb
+            in.skipBytesFully(4);// verb
+            //in.skipBytesFully(1);
             skipParamsPre40(in);                           // params
         }
 
@@ -855,6 +904,7 @@ public class Message<T>
             size += PRE_40_MESSAGE_PREFIX_SIZE;
             size += inetAddressAndPortSerializer.serializedSize(header.from, version);
             size += sizeof(header.verb.id);
+            //size+=1;
             size += serializedParamsSize(addFlagsToLegacyParams(header.params, header.flags), version);
             return Ints.checkedCast(size);
         }
@@ -878,6 +928,9 @@ public class Message<T>
 
             Verb verb = Verb.fromId(buf.getInt(index));
             index += 4;
+
+//            boolean isDryRun = buf.get(index)!=0;
+//            index+=1;
 
             Map<ParamType, Object> params = extractParams(buf, index, version);
             int flags = removeFlagsFromLegacyParams(params);
@@ -980,6 +1033,7 @@ public class Message<T>
             index += buf.get(index - 1);
             // verb
             index += 4;
+            //index+=1;
             if (index > readerLimit)
                 return -1;
 

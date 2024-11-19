@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.opentelemetry.context.Context;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.rows.UnfilteredRowIterator;
@@ -37,6 +38,7 @@ import org.apache.cassandra.metrics.TableMetrics;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.MerkleTree;
 import org.apache.cassandra.utils.MerkleTrees;
+import org.apache.cassandra.utils.TraceUtil;
 
 public class ValidationManager
 {
@@ -59,6 +61,7 @@ public class ValidationManager
 
         for (Range<Token> range : ranges)
         {
+            logger.info("Creating Merkle trees for {}", range);
             long numPartitions = rangePartitionCounts.get(range);
             double rangeOwningRatio = allPartitions > 0 ? (double)numPartitions / allPartitions : 0;
             // determine max tree depth proportional to range size to avoid blowing up memory with multiple tress,
@@ -153,6 +156,9 @@ public class ValidationManager
      */
     public Future<?> submitValidation(ColumnFamilyStore cfs, Validator validator)
     {
+        if(TraceUtil.isDryRun()){
+            return submitValidation$instrumentation(cfs, validator);
+        }
         Callable<Object> validation = new Callable<Object>()
         {
             public Object call() throws IOException
@@ -170,6 +176,29 @@ public class ValidationManager
                 return this;
             }
         };
+
+        return cfs.getRepairManager().submitValidation(validation);
+    }
+
+    public Future<?> submitValidation$instrumentation(ColumnFamilyStore cfs, Validator validator)
+    {
+        Callable<Object> validation = Context.current().wrap(new Callable<Object>()
+        {
+            public Object call() throws IOException
+            {
+                try (TableMetrics.TableTimer.Context c = cfs.metric.validationTime.time())
+                {
+                    doValidation(cfs, validator);
+                }
+                catch (Throwable e)
+                {
+                    // we need to inform the remote end of our failure, otherwise it will hang on repair forever
+                    validator.fail();
+                    throw e;
+                }
+                return this;
+            }
+        });
 
         return cfs.getRepairManager().submitValidation(validation);
     }

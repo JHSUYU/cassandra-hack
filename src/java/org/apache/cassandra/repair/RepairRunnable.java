@@ -144,6 +144,8 @@ public class RepairRunnable extends WrappedRunnable implements ProgressEventNoti
 
     protected void runMayThrow() throws Exception
     {
+        System.out.println("RepairRunnable.runMayThrow");
+        logger.info("Starting repair command #{}, repairing keyspace {}", cmd, keyspace);
         ActiveRepairService.instance.recordRepairStatus(cmd, ActiveRepairService.ParentRepairStatus.IN_PROGRESS, ImmutableList.of());
         final TraceState traceState;
         final UUID parentSession = UUIDGen.getTimeUUID();
@@ -281,6 +283,7 @@ public class RepairRunnable extends WrappedRunnable implements ProgressEventNoti
             return;
         }
 
+        logger.info("FL286, Starting repair command {} on {}", cmd, FBUtilities.getBroadcastAddressAndPort());
         if (options.isPreview())
         {
             previewRepair(parentSession, startTime, commonRanges, cfnames);
@@ -301,7 +304,7 @@ public class RepairRunnable extends WrappedRunnable implements ProgressEventNoti
                               List<CommonRange> commonRanges,
                               String... cfnames)
     {
-
+        logger.info("Normal Repair Starting repair for {}", parentSession);
         // Set up RepairJob executor for this repair command.
         ListeningExecutorService executor = createExecutor();
 
@@ -379,6 +382,7 @@ public class RepairRunnable extends WrappedRunnable implements ProgressEventNoti
                                    List<CommonRange> commonRanges,
                                    String... cfnames)
     {
+        logger.info("Starting incremental repair for {}", parentSession);
         // the local node also needs to be included in the set of participants, since coordinator sessions aren't persisted
         Set<InetAddressAndPort> allParticipants = ImmutableSet.<InetAddressAndPort>builder()
                                            .addAll(allNeighbors)

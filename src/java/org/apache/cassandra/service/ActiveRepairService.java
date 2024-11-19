@@ -74,6 +74,7 @@ import org.apache.cassandra.utils.CassandraVersion;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.MBeanWrapper;
 import org.apache.cassandra.utils.Pair;
+import org.apache.cassandra.utils.TraceUtil;
 import org.apache.cassandra.utils.UUIDGen;
 
 import static com.google.common.collect.Iterables.concat;
@@ -241,6 +242,7 @@ public class ActiveRepairService implements IEndpointStateChangeSubscriber, IFai
                 sessions.remove(session.getId());
             }
         }, MoreExecutors.directExecutor());
+        logger.info("FL244, session.start(executor) isDryRun is {}", TraceUtil.isDryRun());
         session.start(executor);
         return session;
     }

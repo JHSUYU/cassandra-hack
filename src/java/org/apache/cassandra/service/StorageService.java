@@ -46,6 +46,7 @@ import com.google.common.base.Predicates;
 import com.google.common.collect.*;
 import com.google.common.util.concurrent.*;
 
+import io.opentelemetry.context.Context;
 import org.apache.cassandra.dht.RangeStreamer.FetchReplica;
 import org.apache.cassandra.locator.ReplicaCollection.Builder.Conflict;
 import org.apache.commons.lang3.StringUtils;
@@ -3748,6 +3749,37 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         return Pair.create(cmd, ActiveRepairService.repairCommandExecutor.submit(createRepairTask(cmd, keyspace, option, listeners)));
     }
 
+    public Pair<Integer, Future<?>> repair$instrumentation(String keyspace, Map<String, String> repairSpec, List<ProgressListener> listeners)
+    {
+        TraceUtil.createDryRunBaggage();
+        logger.info("FL3840, repair$instrumentation, isDryRun is {}", TraceUtil.isDryRun());
+        RepairOption option = RepairOption.parse(repairSpec, tokenMetadata.partitioner);
+        // if ranges are not specified
+        if (option.getRanges().isEmpty())
+        {
+            if (option.isPrimaryRange())
+            {
+                // when repairing only primary range, neither dataCenters nor hosts can be set
+                if (option.getDataCenters().isEmpty() && option.getHosts().isEmpty())
+                    option.getRanges().addAll(getPrimaryRanges(keyspace));
+                    // except dataCenters only contain local DC (i.e. -local)
+                else if (option.isInLocalDCOnly())
+                    option.getRanges().addAll(getPrimaryRangesWithinDC(keyspace));
+                else
+                    throw new IllegalArgumentException("You need to run primary range repair on all nodes in the cluster.");
+            }
+            else
+            {
+                Iterables.addAll(option.getRanges(), getLocalReplicas(keyspace).onlyFull().ranges());
+            }
+        }
+        if (option.getRanges().isEmpty() || Keyspace.open(keyspace).getReplicationStrategy().getReplicationFactor().allReplicas < 2)
+            return Pair.create(0, Futures.immediateFuture(null));
+
+        int cmd = nextRepairCommand.incrementAndGet();
+        return Pair.create(cmd, ActiveRepairService.repairCommandExecutor.submit(Context.current().wrap(createRepairTask(cmd, keyspace, option, listeners))));
+    }
+
     /**
      * Create collection of ranges that match ring layout from given tokens.
      *
@@ -3797,7 +3829,8 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         {
             throw new IllegalArgumentException("the local data center must be part of the repair");
         }
-
+        logger.info("Starting repair command #{}, repairing keyspace '{}', full repair: {}, primary range: {}, token range: {}, data center filter: {}, hosts filter: {}",
+                    cmd, keyspace, options.isIncremental(), options.isPrimaryRange(), options.getRanges(), options.getDataCenters(), options.getHosts());
         RepairRunnable task = new RepairRunnable(this, cmd, options, keyspace);
         task.addProgressListener(progressSupport);
         for (ProgressListener listener : listeners)
@@ -3805,6 +3838,7 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
 
         if (options.isTraced())
         {
+            logger.info("FL3840, options.isTraced() = true");
             Runnable r = () ->
             {
                 try
@@ -3816,9 +3850,9 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
                     ExecutorLocals.set(null);
                 }
             };
-            return new FutureTask<>(r, null);
+            return new FutureTask<>(Context.current().wrap(r), null);
         }
-        return new FutureTask<>(task, null);
+        return new FutureTask<>(Context.current().wrap(task), null);
     }
 
     public void forceTerminateAllRepairSessions()

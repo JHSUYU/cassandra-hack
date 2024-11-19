@@ -38,6 +38,7 @@ import java.util.stream.Stream;
 
 import com.google.common.annotations.VisibleForTesting;
 
+import io.opentelemetry.context.Context;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.Verb;
@@ -122,7 +123,7 @@ public enum Stage
     }
 
     // Convenience functions to execute on this stage
-    public void execute(Runnable command) { executor().execute(command); }
+    public void execute(Runnable command) { executor().execute(Context.current().wrap(command)); }
     public void execute(Runnable command, ExecutorLocals locals) { executor().execute(command, locals); }
     public void maybeExecuteImmediately(Runnable command) { executor().maybeExecuteImmediately(command); };
     public <T> Future<T> submit(Callable<T> task) { return executor().submit(task); }
